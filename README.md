@@ -271,3 +271,24 @@ Use these for demo/testing after ingestion is complete.
 - In Docker mode, Selenium is provided by `selenium/standalone-chrome`.
 - Chroma data persists via Docker volume (`chroma_data`).
 - MySQL data persists via Docker volume (`mysql_data`).
+
+---
+
+## Render Lite (2 Services Only)
+
+If you want the fastest cloud demo setup, deploy only:
+- backend (Render Web Service)
+- frontend (Render Web Service)
+
+Use backend env vars for simple deployment:
+
+```env
+DB_ENGINE=sqlite
+CACHE_BACKEND=locmem
+CELERY_TASK_ALWAYS_EAGER=True
+CELERY_TASK_EAGER_PROPAGATES=True
+SELENIUM_REMOTE_URL=
+```
+
+This mode avoids separate Celery, Redis, MySQL, and Selenium services.
+`/api/books/upload/` still works, but tasks execute inline in the backend process.

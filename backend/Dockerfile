@@ -25,3 +25,4 @@ RUN dos2unix /app/backend/entrypoint.sh && chmod +x /app/backend/entrypoint.sh
 
 WORKDIR /app/backend
 EXPOSE 8000
+CMD ["sh", "-c", "./entrypoint.sh gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout 120"]
