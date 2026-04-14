@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --canvas: 245 243 238;
+  --panel: 255 255 255;
+  --accent: 12 118 110;
+  --text: 17 24 39;
+  --muted: 88 97 113;
+}
+
+.dark {
+  --canvas: 8 15 22;
+  --panel: 13 23 33;
+  --accent: 84 214 198;
+  --text: 238 243 248;
+  --muted: 150 167 184;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(12, 118, 110, 0.18), transparent 30%),
+    radial-gradient(circle at 80% 20%, rgba(255, 184, 77, 0.12), transparent 22%),
+    linear-gradient(180deg, rgb(var(--canvas)) 0%, rgb(var(--canvas)) 100%);
+  color: rgb(var(--text));
+}

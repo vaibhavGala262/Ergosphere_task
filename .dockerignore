@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+node_modules
+frontend/.next
+backend/staticfiles
+backend/chroma_store
+db.sqlite3
+.env

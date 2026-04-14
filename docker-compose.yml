@@ -1,0 +1,111 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: dip_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-document_intelligence}
+      MYSQL_USER: ${MYSQL_USER:-appuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-apppassword}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: dip_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  selenium:
+    image: selenium/standalone-chrome:latest
+    container_name: dip_selenium
+    restart: unless-stopped
+    shm_size: 2gb
+    ports:
+      - "4444:4444"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: dip_backend
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      DB_ENGINE: mysql
+      MYSQL_HOST: mysql
+      REDIS_URL: redis://redis:6379/1
+      SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
+      CHROMA_PERSIST_DIR: /app/backend/chroma_store
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      CORS_ALLOW_ALL: "True"
+    command: ["/app/backend/entrypoint.sh", "gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2"]
+    volumes:
+      - chroma_data:/app/backend/chroma_store
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      selenium:
+        condition: service_started
+
+  celery:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: dip_celery
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      DB_ENGINE: mysql
+      MYSQL_HOST: mysql
+      REDIS_URL: redis://redis:6379/1
+      SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
+      CHROMA_PERSIST_DIR: /app/backend/chroma_store
+    command: ["/app/backend/entrypoint.sh", "celery", "-A", "config", "worker", "-l", "info", "--pool=solo"]
+    volumes:
+      - chroma_data:/app/backend/chroma_store
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      selenium:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: dip_frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api
+      INTERNAL_API_BASE_URL: http://backend:8000/api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  chroma_data:
