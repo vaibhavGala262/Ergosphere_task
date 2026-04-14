@@ -6,7 +6,7 @@ class Book(models.Model):
     author = models.CharField(max_length=255)
     rating = models.FloatField(default=0.0)
     description = models.TextField()
-    url = models.URLField(unique=True)
+    url = models.URLField(unique=True, max_length=512)
     ai_summary = models.TextField(blank=True)
     genre = models.CharField(max_length=100, blank=True)
     sentiment = models.CharField(max_length=50, blank=True)

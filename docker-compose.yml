@@ -81,7 +81,7 @@ services:
       REDIS_URL: redis://redis:6379/1
       SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
       CHROMA_PERSIST_DIR: /app/backend/chroma_store
-    command: ["/app/backend/entrypoint.sh", "celery", "-A", "config", "worker", "-l", "info", "--pool=solo"]
+    command: ["/app/backend/entrypoint.sh", "celery", "-A", "config", "worker", "-l", "info", "--pool=prefork", "--concurrency=2", "--prefetch-multiplier=1", "--max-tasks-per-child=20"]
     volumes:
       - chroma_data:/app/backend/chroma_store
     depends_on:
@@ -102,7 +102,7 @@ services:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api
       INTERNAL_API_BASE_URL: http://backend:8000/api
     ports:
-      - "3000:3000"
+      - "3001:3000"
     depends_on:
       - backend
 

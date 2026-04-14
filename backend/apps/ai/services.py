@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
+from functools import wraps
 from typing import Iterable
 from uuid import uuid4
 
@@ -16,7 +18,6 @@ from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 from sentence_transformers import SentenceTransformer
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -27,6 +28,44 @@ from apps.books.models import Book, BookChunk
 class ChunkPayload:
     text: str
     order: int
+
+
+def _is_rate_limited_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {429, 503}:
+        return True
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in [
+            "429",
+            "503",
+            "rate limit",
+            "resource_exhausted",
+            "too many requests",
+            "service unavailable",
+            "quota",
+        ]
+    )
+
+
+def _with_rate_limit_retries(max_attempts: int = 3, base_delay: float = 1.0):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as exc:
+                    if not _is_rate_limited_error(exc) or attempt == max_attempts - 1:
+                        raise
+                    delay = base_delay * (2**attempt) + random.uniform(0.1, 0.6)
+                    time.sleep(delay)
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 class EmbeddingService:
@@ -70,16 +109,24 @@ class EmbeddingService:
             return []
         if self.provider == "openai":
             model_name = settings.OPENAI_EMBEDDING_MODEL or self.model_name
-            response = self._get_openai().embeddings.create(model=model_name, input=texts)
+            response = self._embed_openai(model_name, texts)
             return [row.embedding for row in response.data]
         if self.provider == "gemini":
             model_name = settings.GEMINI_EMBEDDING_MODEL or self.model_name
-            response = self._get_gemini().models.embed_content(model=model_name, contents=texts)
+            response = self._embed_gemini(model_name, texts)
             embeddings = self._extract_gemini_embeddings(response)
             if embeddings:
                 return embeddings
             raise ValueError("Gemini embedding response did not include vector values.")
         return self._get_sentence_model().encode(texts, normalize_embeddings=True).tolist()
+
+    @_with_rate_limit_retries()
+    def _embed_openai(self, model_name: str, texts: list[str]):
+        return self._get_openai().embeddings.create(model=model_name, input=texts)
+
+    @_with_rate_limit_retries()
+    def _embed_gemini(self, model_name: str, texts: list[str]):
+        return self._get_gemini().models.embed_content(model=model_name, contents=texts)
 
 
 class ChromaService:
@@ -161,21 +208,29 @@ class LLMService:
 
     def complete(self, prompt: str, system: str = "You are a precise assistant for book analysis.") -> str:
         if self.provider == "openai" and self.client:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                temperature=0.2,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            )
+            response = self._complete_openai(prompt, system)
             return response.choices[0].message.content or ""
         if self.provider == "gemini" and self.gemini:
-            gemini_model = settings.GEMINI_CHAT_MODEL or "gemini-2.5-flash"
-            combined_prompt = f"System instruction: {system}\n\nUser prompt: {prompt}"
-            response = self.gemini.models.generate_content(model=gemini_model, contents=combined_prompt)
+            response = self._complete_gemini(prompt, system)
             if hasattr(response, "text") and response.text:
                 return response.text
         return (
             "LLM provider not configured. Set OPENAI_API_KEY for OpenAI or GEMINI_API_KEY for Gemini."
         )
+
+    @_with_rate_limit_retries(max_attempts=2, base_delay=0.8)
+    def _complete_openai(self, prompt: str, system: str):
+        return self.client.chat.completions.create(
+            model=self.model,
+            temperature=0.2,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        )
+
+    @_with_rate_limit_retries(max_attempts=2, base_delay=0.8)
+    def _complete_gemini(self, prompt: str, system: str):
+        gemini_model = settings.GEMINI_CHAT_MODEL or "gemini-2.5-flash"
+        combined_prompt = f"System instruction: {system}\n\nUser prompt: {prompt}"
+        return self.gemini.models.generate_content(model=gemini_model, contents=combined_prompt)
 
 
 class BookIntelligenceService:
@@ -185,14 +240,26 @@ class BookIntelligenceService:
         self.llm = LLMService()
 
     def summarize(self, description: str) -> str:
-        return self.llm.complete(f"Summarize this book description in 3 concise bullet-style sentences:\n{description}")
+        prompt = f"Summarize this book description in 3 concise bullet-style sentences:\n{description}"
+        try:
+            summary = self.llm.complete(prompt).strip()
+            if summary:
+                return summary
+        except Exception:
+            pass
+        sentences = [line.strip() for line in description.replace("\n", " ").split(".") if line.strip()]
+        fallback = ". ".join(sentences[:3]).strip()
+        return (fallback + ".") if fallback else "Summary unavailable."
 
     def classify_genre(self, description: str) -> str:
         prompt = (
             f"Choose the single best genre from {', '.join(self.genres)} "
             f"for this description. Return only the genre.\n{description}"
         )
-        result = self.llm.complete(prompt).strip()
+        try:
+            result = self.llm.complete(prompt).strip()
+        except Exception:
+            return "General"
         return result if result in self.genres else "General"
 
     def sentiment(self, description: str) -> str:
@@ -224,7 +291,13 @@ class RAGService:
         self.chroma.upsert_chunks(book, chunks, embeddings)
 
     def answer_question(self, question: str, top_k: int = 4) -> dict:
-        query_embedding = self.embedder.embed([question])[0]
+        try:
+            query_embedding = self.embedder.embed([question])[0]
+        except Exception:
+            return {
+                "answer": "The AI service is currently rate-limited. Please retry in a moment.",
+                "sources": [],
+            }
         result = self.chroma.query(query_embedding, top_k=top_k)
         documents = result.get("documents", [[]])[0]
         metas = result.get("metadatas", [[]])[0]
@@ -239,7 +312,10 @@ class RAGService:
             "If the answer is uncertain, say so.\n\n"
             f"Question: {question}\n\nContext:\n{context}"
         )
-        answer = self.llm.complete(prompt)
+        try:
+            answer = self.llm.complete(prompt)
+        except Exception:
+            answer = "The AI service is currently rate-limited. Please retry in a moment."
         sources = [
             {"title": meta["title"], "author": meta["author"], "url": meta["url"], "excerpt": doc[:180]}
             for doc, meta in zip(documents, metas)
@@ -254,7 +330,10 @@ class RecommendationService:
 
     def recommend(self, book_id: int, top_k: int = 4) -> QuerySet[Book]:
         book = Book.objects.get(pk=book_id)
-        query_embedding = self.embedder.embed([book.description])[0]
+        try:
+            query_embedding = self.embedder.embed([book.description])[0]
+        except Exception:
+            return Book.objects.none()
         result = self.chroma.query(query_embedding, top_k=top_k + 1)
         ids: list[int] = []
         for meta in result.get("metadatas", [[]])[0]:
@@ -276,43 +355,77 @@ class SeleniumScraperService:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         if settings.SELENIUM_REMOTE_URL:
-            return webdriver.Remote(command_executor=settings.SELENIUM_REMOTE_URL, options=options)
+            driver = webdriver.Remote(command_executor=settings.SELENIUM_REMOTE_URL, options=options)
+            driver.set_page_load_timeout(30)
+            driver.set_script_timeout(30)
+            return driver
         service = Service(ChromeDriverManager().install())
-        return webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
+        return driver
 
-    def scrape(self, pages: int = 1, start_url: str | None = None) -> list[dict]:
+    def scrape(self, pages: int = 1, start_url: str | None = None, progress_callback=None) -> list[dict]:
         url = start_url or self.base_url
         books: list[dict] = []
-        driver = self._driver()
         try:
-            for _ in range(pages):
-                books.extend(self._scrape_page(driver, url))
-                next_link = self._safe_find(driver, "next")
-                if not next_link:
+            driver = self._driver()
+        except Exception:
+            for page_number in range(1, pages + 1):
+                if progress_callback:
+                    progress_callback(page_number, pages, url)
+                html = self._scrape_page(url)
+                books.extend(self._extract_books(html, url))
+                next_url = self._find_next_url(html, url)
+                if not next_url:
                     break
-                url = next_link.get_attribute("href")
-                driver.get(url)
+                url = next_url
+            return books
+
+        try:
+            for page_number in range(1, pages + 1):
+                if progress_callback:
+                    progress_callback(page_number, pages, url)
+                html = self._scrape_with_driver(driver, url)
+                books.extend(self._extract_books(html, url))
+                next_url = self._find_next_url(html, url)
+                if not next_url:
+                    break
+                url = next_url
         finally:
             driver.quit()
         return books
 
-    def _scrape_page(self, driver, url: str) -> list[dict]:
+    def _scrape_with_driver(self, driver, url: str) -> str:
         last_error = None
         for attempt in range(self.retries):
             try:
                 driver.get(url)
                 time.sleep(1)
-                return self._extract_books(driver.page_source, url)
+                return driver.page_source
             except WebDriverException as exc:
                 last_error = exc
                 time.sleep(2**attempt)
         raise last_error
 
-    def _safe_find(self, driver, class_name: str):
-        try:
-            return driver.find_element(By.CLASS_NAME, class_name).find_element(By.TAG_NAME, "a")
-        except Exception:
+    def _scrape_page(self, url: str) -> str:
+        last_error = None
+        for attempt in range(self.retries):
+            try:
+                response = requests.get(url, timeout=15)
+                response.raise_for_status()
+                return response.text
+            except requests.RequestException as exc:
+                last_error = exc
+                time.sleep(2**attempt)
+        raise last_error
+
+    def _find_next_url(self, html: str, page_url: str) -> str | None:
+        soup = BeautifulSoup(html, "html.parser")
+        next_anchor = soup.select_one("li.next a")
+        if not next_anchor:
             return None
+        return requests.compat.urljoin(page_url, next_anchor.get("href", ""))
 
     def _extract_books(self, html: str, page_url: str) -> list[dict]:
         soup = BeautifulSoup(html, "html.parser")
@@ -321,11 +434,16 @@ class SeleniumScraperService:
             title_node = card.select_one("h3 a")
             rating_node = card.select_one("p.star-rating")
             title = title_node.get("title", title_node.text.strip())
-            description = self._fetch_description(title_node.get("href", ""))
+            if settings.SCRAPER_ENRICH_EXTERNAL:
+                description = self._fetch_description(title_node.get("href", ""))
+                author = self._resolve_author(title)
+            else:
+                description = "Description unavailable."
+                author = "Unknown Author"
             results.append(
                 {
                     "title": title,
-                    "author": self._resolve_author(title),
+                    "author": author,
                     "rating": self._rating_to_float(rating_node.get("class", [])),
                     "description": description,
                     "url": requests.compat.urljoin(page_url, title_node.get("href", "")),
@@ -372,9 +490,10 @@ class BookIngestionService:
         self.intelligence = BookIntelligenceService()
         self.rag = RAGService()
 
-    def ingest_scraped_books(self, records: list[dict]) -> list[Book]:
+    def ingest_scraped_books(self, records: list[dict], progress_callback=None) -> list[Book]:
         saved_books = []
-        for record in records:
+        total = len(records)
+        for index, record in enumerate(records, start=1):
             book, created = Book.objects.get_or_create(
                 url=record["url"],
                 defaults={
@@ -385,10 +504,22 @@ class BookIngestionService:
                 },
             )
             if created:
-                book.ai_summary = self.intelligence.summarize(book.description)
-                book.genre = self.intelligence.classify_genre(book.description)
+                if settings.INGEST_ENABLE_LLM:
+                    book.ai_summary = self.intelligence.summarize(book.description)
+                    book.genre = self.intelligence.classify_genre(book.description)
+                else:
+                    preview = [line.strip() for line in book.description.replace("\n", " ").split(".") if line.strip()]
+                    book.ai_summary = (". ".join(preview[:2]).strip() + ".") if preview else "Summary unavailable."
+                    book.genre = "General"
                 book.sentiment = self.intelligence.sentiment(book.description)
                 book.save(update_fields=["ai_summary", "genre", "sentiment"])
-                self.rag.index_book(book)
+                if settings.INGEST_ENABLE_EMBEDDINGS:
+                    try:
+                        self.rag.index_book(book)
+                    except Exception:
+                        # Preserve successful scrape even if embedding provider is temporarily throttled.
+                        pass
             saved_books.append(book)
+            if progress_callback:
+                progress_callback(index, total, book)
         return saved_books

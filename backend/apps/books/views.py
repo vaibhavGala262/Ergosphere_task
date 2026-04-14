@@ -40,6 +40,8 @@ class RecommendBooksView(APIView):
 
 
 class UploadBooksView(APIView):
+    throttle_classes = []
+
     def post(self, request):
         serializer = UploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -48,14 +50,18 @@ class UploadBooksView(APIView):
 
 
 class UploadTaskStatusView(APIView):
+    throttle_classes = []
+
     def get(self, request, task_id: str):
         task = AsyncResult(task_id)
+        info = task.info if isinstance(task.info, dict) else None
         payload = {
             "task_id": task_id,
             "status": task.status,
             "ready": task.ready(),
             "successful": task.successful() if task.ready() else False,
             "result": task.result if task.ready() and not isinstance(task.result, Exception) else None,
+            "info": info,
         }
         if task.failed():
             payload["error"] = str(task.result)

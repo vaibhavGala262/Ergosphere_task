@@ -23,6 +23,7 @@ Full-stack AI-powered platform for scraping books, indexing semantic chunks, run
   - genre classification
   - sentiment analysis
   - recommendation by embedding similarity
+  - external author/description enrichment during scraping
 - Advanced features:
   - Redis caching
   - Celery background ingestion
@@ -34,6 +35,19 @@ Full-stack AI-powered platform for scraping books, indexing semantic chunks, run
 - Book detail page with summary/genre/sentiment/recommendations
 - Q&A page with citations, loading states, and toast status feedback
 - Dark mode and responsive layout
+
+### Screenshots
+#### Dashboard (Dark)
+![Dashboard Dark](docs/screenshots/dashboard.png)
+
+#### Dashboard (Light)
+![Dashboard Light](docs/screenshots/dashboard-light.png)
+
+#### Book Detail
+![Book Detail](docs/screenshots/book-detail.png)
+
+#### Q&A Page
+![Q&A Page](docs/screenshots/qa.png)
 
 ### Infrastructure
 - Dockerized multi-service stack:
@@ -86,8 +100,10 @@ All should be `running`:
 - `dip_frontend`
 
 ### 5. Open app
-- Frontend: `http://localhost:3000`
+- Frontend: `http://localhost:3001`
 - API base: `http://localhost:8000/api`
+
+If port 3000 is already in use, Docker compose maps the frontend to host port 3001.
 
 ### 6. First data ingestion
 
@@ -149,7 +165,7 @@ python manage.py runserver
 
 ```bash
 cd backend
-celery -A config worker -l info --pool=solo
+celery -A config worker -l info --pool=prefork --concurrency=2 --prefetch-multiplier=1
 ```
 
 ### 4. Frontend
@@ -171,7 +187,7 @@ LLM_PROVIDER=gemini
 EMBEDDING_PROVIDER=gemini
 GEMINI_API_KEY=your_key
 GEMINI_CHAT_MODEL=gemini-2.5-flash
-GEMINI_EMBEDDING_MODEL=text-embedding-004
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 ```
 
 ### OpenAI
@@ -211,6 +227,41 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 ```json
 { "question": "Which books focus on emotional recovery?", "session_id": "optional", "top_k": 4 }
 ```
+
+---
+
+## Sample Questions and Answers
+
+Use these for demo/testing after ingestion is complete.
+
+1. Question:
+  `Which books have a positive emotional tone and themes of resilience?`
+  Typical answer shape:
+  - concise paragraph answer
+  - 2-4 citations with title, author, url, excerpt
+
+2. Question:
+  `Recommend books similar to The Requiem Red and explain why.`
+  Typical answer shape:
+  - recommendation rationale based on retrieved chunk similarity
+  - source citations from related books
+
+3. Question:
+  `Summarize key themes across non-fiction books in this dataset.`
+  Typical answer shape:
+  - grouped themes from retrieved sources
+  - explicit uncertainty when context is weak
+
+---
+
+## Submission Checklist
+
+- Full stack runs with Docker (`frontend`, `backend`, `celery`, `mysql`, `redis`, `selenium`)
+- `requirements.txt` is included
+- API docs and example payloads are included in this README
+- 4 UI screenshots are included under `docs/screenshots/`
+- Sample RAG questions are included
+- Environment variables are used for secrets and provider settings
 
 ---
 

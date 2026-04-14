@@ -105,7 +105,7 @@ REST_FRAMEWORK = {
 }
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = os.getenv("APP_TIME_ZONE", "Asia/Calcutta")
+TIME_ZONE = os.getenv("APP_TIME_ZONE", "Asia/Kolkata")
 USE_I18N = True
 USE_TZ = True
 STATIC_URL = "static/"
@@ -115,6 +115,9 @@ CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL", "True").lower() == "true"
 
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = "django-db"
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "900"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "840"))
 
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", str(BASE_DIR / "chroma_store"))
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "sentence-transformers")
@@ -125,6 +128,9 @@ OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
-GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004")
+GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
 SCRAPER_BASE_URL = os.getenv("SCRAPER_BASE_URL", "https://books.toscrape.com/")
 SELENIUM_REMOTE_URL = os.getenv("SELENIUM_REMOTE_URL", "")
+SCRAPER_ENRICH_EXTERNAL = os.getenv("SCRAPER_ENRICH_EXTERNAL", "True").lower() == "true"
+INGEST_ENABLE_LLM = os.getenv("INGEST_ENABLE_LLM", "True").lower() == "true"
+INGEST_ENABLE_EMBEDDINGS = os.getenv("INGEST_ENABLE_EMBEDDINGS", "True").lower() == "true"
